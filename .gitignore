@@ -1,0 +1,28 @@
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# The compiled binary (if built locally)
+handler
+
+# SAM/CloudFormation build artifacts
+.aws-sam/
+
+# SAM configuration file
+# This file may contain sensitive information or environment-specific details.
+samconfig.toml
+
+# IDE / Editor specific files
+.vscode/
+.idea/
+*.swp
+
+# OS-specific files
+.DS_Store
+._*
+
+# Log files
+*.log

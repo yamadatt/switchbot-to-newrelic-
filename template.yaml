@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  switchbot-to-newrelic
+
+  SAM application to periodically fetch sensor data from SwitchBot and send it to New Relic.
+  This version uses AWS SSM Parameter Store to manage secrets.
+
+Globals:
+  Function:
+    Timeout: 60
+
+Resources:
+  SwitchBotToNewRelicFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Architectures:
+        - x86_64
+      Events:
+        ScheduledEvent:
+          Type: Schedule
+          Properties:
+            Schedule: rate(15 minutes)
+            Name: switchbot-sensor-fetch-schedule
+            Description: "Triggers the function to fetch SwitchBot sensor data every 15 minutes."
+            Enabled: True
+      Environment:
+        Variables:
+          # ssm-secureはSecureStringタイプのパラメータを取得します
+          SWITCHBOT_TOKEN: !Sub '{{resolve:ssm-secure:${SwitchBotTokenParameterName}}}'
+          NEW_RELIC_LICENSE_KEY: !Sub '{{resolve:ssm-secure:${NewRelicLicenseKeyParameterName}}}'
+          # ssmはStringタイプのパラメータを取得します
+          SWITCHBOT_DEVICE_ID: !Sub '{{resolve:ssm:${SwitchBotDeviceIdParameterName}}}'
+          NEW_RELIC_APP_NAME: !Sub '{{resolve:ssm:${NewRelicAppNameParameterName}}}'
+          NEW_RELIC_ACCOUNT_ID: !Sub '{{resolve:ssm:${NewRelicAccountIdParameterName}}}'
+
+    Metadata:
+      DockerTag: go1.x-v1
+      DockerContext: ./
+      Dockerfile: Dockerfile
+
+Parameters:
+  SwitchBotTokenParameterName:
+    Type: String
+    Description: "(Required) The name of the SSM Parameter for your SwitchBot API Token."
+    Default: "/switchbot/token"
+
+  SwitchBotDeviceIdParameterName:
+    Type: String
+    Description: "(Required) The name of the SSM Parameter for your SwitchBot Device ID."
+    Default: "/switchbot/device_id"
+
+  NewRelicAppNameParameterName:
+    Type: String
+    Description: "(Required) The name of the SSM Parameter for your New Relic Application Name."
+    Default: "/newrelic/app_name"
+
+  NewRelicLicenseKeyParameterName:
+    Type: String
+    Description: "(Required) The name of the SSM Parameter for your New Relic License Key."
+    Default: "/newrelic/license_key"
+
+  NewRelicAccountIdParameterName:
+    Type: String
+    Description: "(Required) The name of the SSM Parameter for your New Relic Account ID."
+    Default: "/newrelic/account_id"
