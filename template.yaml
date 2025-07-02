@@ -17,6 +17,24 @@ Resources:
       PackageType: Image
       Architectures:
         - x86_64
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+              Resource:
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SwitchBotTokenParameterName}"
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${NewRelicLicenseKeyParameterName}"
+            - Effect: Allow
+              Action:
+                - kms:Decrypt
+              Resource:
+                - !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+              Condition:
+                StringEquals:
+                  'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'
       Events:
         ScheduledEvent:
           Type: Schedule
@@ -27,10 +45,10 @@ Resources:
             Enabled: True
       Environment:
         Variables:
-          # ssm-secureはSecureStringタイプのパラメータを取得します
-          SWITCHBOT_TOKEN: !Sub '{{resolve:ssm-secure:${SwitchBotTokenParameterName}}}'
-          NEW_RELIC_LICENSE_KEY: !Sub '{{resolve:ssm-secure:${NewRelicLicenseKeyParameterName}}}'
-          # ssmはStringタイプのパラメータを取得します
+          # セキュアパラメータは実行時にSSMから取得するため、パラメータ名のみを環境変数として設定
+          SWITCHBOT_TOKEN_PARAMETER: !Ref SwitchBotTokenParameterName
+          NEW_RELIC_LICENSE_KEY_PARAMETER: !Ref NewRelicLicenseKeyParameterName
+          # 通常のパラメータは直接取得可能
           SWITCHBOT_DEVICE_ID: !Sub '{{resolve:ssm:${SwitchBotDeviceIdParameterName}}}'
           NEW_RELIC_APP_NAME: !Sub '{{resolve:ssm:${NewRelicAppNameParameterName}}}'
           NEW_RELIC_ACCOUNT_ID: !Sub '{{resolve:ssm:${NewRelicAccountIdParameterName}}}'

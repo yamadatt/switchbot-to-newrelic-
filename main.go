@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ssm"
 	"github.com/newrelic/go-agent/v3/newrelic"
 )
 
@@ -38,22 +41,46 @@ type NewRelicApp interface {
 	WaitForConnection(timeout time.Duration) error // ここを修正
 }
 
+// getSSMParameter は SSM Parameter Store からセキュアパラメータを取得します
+func getSSMParameter(parameterName string, withDecryption bool) (string, error) {
+	log.Printf("SSM パラメータを取得中: %s (withDecryption: %v)", parameterName, withDecryption)
+	
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = "ap-northeast-1" // デフォルトリージョン
+	}
+	log.Printf("使用するリージョン: %s", region)
+	
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String(region),
+	})
+	if err != nil {
+		return "", fmt.Errorf("AWS セッションの作成に失敗しました: %w", err)
+	}
+
+	ssmClient := ssm.New(sess)
+	
+	input := &ssm.GetParameterInput{
+		Name:           aws.String(parameterName),
+		WithDecryption: aws.Bool(withDecryption),
+	}
+
+	log.Printf("SSM GetParameter API を呼び出し中...")
+	result, err := ssmClient.GetParameter(input)
+	if err != nil {
+		return "", fmt.Errorf("SSM パラメータ %s の取得に失敗しました: %w", parameterName, err)
+	}
+
+	log.Printf("SSM パラメータの取得に成功: %s", parameterName)
+	return *result.Parameter.Value, nil
+}
+
 // HandleRequest は Lambdaハンドラの実際のロジックを含みます。
 // 依存オブジェクト (httpClient, nrApp) を引数として受け取るように変更しました。
 func HandleRequest(ctx context.Context, httpClient *http.Client, nrApp NewRelicApp) (string, error) {
 	log.Println("Lambda関数を開始します...")
 
-	// --- NewRelicの初期化 (nrAppを直接使用) ---
-	// 環境変数はHandleRequestの外部で設定されることを想定
-	appName := os.Getenv("NEW_RELIC_APP_NAME")
-	if appName == "" {
-		log.Fatal("環境変数 NEW_RELIC_APP_NAME が設定されていません。")
-	}
-	licenseKey := os.Getenv("NEW_RELIC_LICENSE_KEY")
-	if licenseKey == "" {
-		log.Fatal("環境変数 NEW_RELIC_LICENSE_KEY が設定されていません。")
-	}
-
+	// --- NewRelicの初期化は main関数で実行済み ---
 	log.Println("NewRelicへの接続を待機中...")
 	if err := nrApp.WaitForConnection(5 * time.Second); err != nil {
 		log.Printf("NewRelicへの接続に失敗しました: %v", err)
@@ -65,9 +92,14 @@ func HandleRequest(ctx context.Context, httpClient *http.Client, nrApp NewRelicA
 	defer nrApp.Shutdown(10 * time.Second)
 
 	// --- SwitchBot APIからのデータ取得 ---
-	token := os.Getenv("SWITCHBOT_TOKEN")
-	if token == "" {
-		return "", fmt.Errorf("環境変数 SWITCHBOT_TOKEN が設定されていません")
+	// SwitchBot TokenをSSM Parameter Storeから取得
+	tokenParam := os.Getenv("SWITCHBOT_TOKEN_PARAMETER")
+	if tokenParam == "" {
+		return "", fmt.Errorf("環境変数 SWITCHBOT_TOKEN_PARAMETER が設定されていません")
+	}
+	token, err := getSSMParameter(tokenParam, true)
+	if err != nil {
+		return "", fmt.Errorf("SwitchBot Tokenの取得に失敗しました: %w", err)
 	}
 	deviceID := os.Getenv("SWITCHBOT_DEVICE_ID")
 	if deviceID == "" {
@@ -127,7 +159,16 @@ func HandleRequest(ctx context.Context, httpClient *http.Client, nrApp NewRelicA
 func main() {
 	// New Relicアプリケーションの初期化
 	appName := os.Getenv("NEW_RELIC_APP_NAME")
-	licenseKey := os.Getenv("NEW_RELIC_LICENSE_KEY")
+	
+	// NewRelic License KeyをSSM Parameter Storeから取得
+	licenseKeyParam := os.Getenv("NEW_RELIC_LICENSE_KEY_PARAMETER")
+	if licenseKeyParam == "" {
+		log.Fatal("環境変数 NEW_RELIC_LICENSE_KEY_PARAMETER が設定されていません。")
+	}
+	licenseKey, err := getSSMParameter(licenseKeyParam, true)
+	if err != nil {
+		log.Fatalf("NewRelic License Keyの取得に失敗しました: %v", err)
+	}
 
 	app, err := newrelic.NewApplication(
 		newrelic.ConfigAppName(appName),

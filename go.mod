@@ -1,15 +1,17 @@
 module switchbot-to-newrelic
 
-go 1.24.2
+go 1.22
 
 require (
 	github.com/aws/aws-lambda-go v1.49.0
+	github.com/aws/aws-sdk-go v1.55.7
 	github.com/newrelic/go-agent/v3 v3.39.0
 	github.com/stretchr/testify v1.10.0
 )
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	golang.org/x/net v0.25.0 // indirect
 	golang.org/x/sys v0.20.0 // indirect
