@@ -1,10 +1,11 @@
 module switchbot-to-newrelic
 
-go 1.22
+go 1.24.2
 
 require (
 	github.com/aws/aws-lambda-go v1.49.0
 	github.com/aws/aws-sdk-go v1.55.7
+	github.com/google/go-cmp v0.6.0
 	github.com/newrelic/go-agent/v3 v3.39.0
 	github.com/stretchr/testify v1.10.0
 )

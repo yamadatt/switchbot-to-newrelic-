@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -32,8 +32,8 @@ func main() {
 
 	// SwitchBot APIのモック
 	http.HandleFunc("/v1.1/devices/", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Received request: %s %s", r.Method, r.URL.Path)
-		log.Printf("Headers: %v", r.Header)
+		slog.Info("Received request", "method", r.Method, "path", r.URL.Path)
+		slog.Info("Headers", "headers", r.Header)
 
 		// 認証ヘッダーの確認
 		auth := r.Header.Get("Authorization")
@@ -83,28 +83,28 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
-			log.Printf("Encode error: %v", err)
+			slog.Error("Encode error", "error", err)
 		}
-		log.Printf("Sent response: %+v", response)
+		slog.Info("Sent response", "response", response)
 	})
 
 	// New Relic APIのモック（イベント送信確認用）
 	http.HandleFunc("/v1/accounts/", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("New Relic mock received: %s %s", r.Method, r.URL.Path)
-		log.Printf("Headers: %v", r.Header)
+		slog.Info("New Relic mock received", "method", r.Method, "path", r.URL.Path)
+		slog.Info("Headers", "headers", r.Header)
 
 		// リクエストボディをログ出力
 		if r.Body != nil {
 			body := make([]byte, r.ContentLength)
 			if _, err := r.Body.Read(body); err != nil {
-				log.Printf("Body read error: %v", err)
+				slog.Error("Body read error", "error", err)
 			}
-			log.Printf("Request body: %s", string(body))
+			slog.Info("Request body", "body", string(body))
 		}
 
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte(`{"success": true}`)); err != nil {
-			log.Printf("Write error: %v", err)
+			slog.Error("Write error", "error", err)
 		}
 	})
 
@@ -112,16 +112,17 @@ func main() {
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("OK")); err != nil {
-			log.Printf("Write error: %v", err)
+			slog.Error("Write error", "error", err)
 		}
 	})
 
-	log.Printf("Mock server starting on port %s", port)
-	log.Printf("SwitchBot API mock: http://localhost:%s/v1.1/devices/{deviceId}/status", port)
-	log.Printf("New Relic API mock: http://localhost:%s/v1/accounts/{accountId}/events", port)
-	log.Printf("Health check: http://localhost:%s/health", port)
+	slog.Info("Mock server starting", "port", port)
+	slog.Info("SwitchBot API mock", "url", "http://localhost:"+port+"/v1.1/devices/{deviceId}/status")
+	slog.Info("New Relic API mock", "url", "http://localhost:"+port+"/v1/accounts/{accountId}/events")
+	slog.Info("Health check", "url", "http://localhost:"+port+"/health")
 
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		log.Fatal("Server failed to start:", err)
+		slog.Error("Server failed to start", "error", err)
+		os.Exit(1)
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -41,15 +41,23 @@ type NewRelicApp interface {
 	WaitForConnection(timeout time.Duration) error // ここを修正
 }
 
+// getSSMParameterFunc型を定義
+// SSMパラメータ取得関数の型
+// テスト時にモック化しやすくするため
+
+type getSSMParameterFunc func(parameterName string, withDecryption bool) (string, error)
+
 // getSSMParameter は SSM Parameter Store からセキュアパラメータを取得します
 func getSSMParameter(parameterName string, withDecryption bool) (string, error) {
-	log.Printf("SSM パラメータを取得中: %s (withDecryption: %v)", parameterName, withDecryption)
+	slog.Info("SSM パラメータを取得中",
+		"parameterName", parameterName,
+		"withDecryption", withDecryption)
 
 	region := os.Getenv("AWS_REGION")
 	if region == "" {
 		region = "ap-northeast-1" // デフォルトリージョン
 	}
-	log.Printf("使用するリージョン: %s", region)
+	slog.Info("使用するリージョン", "region", region)
 
 	sess, err := session.NewSession(&aws.Config{
 		Region: aws.String(region),
@@ -65,28 +73,28 @@ func getSSMParameter(parameterName string, withDecryption bool) (string, error) 
 		WithDecryption: aws.Bool(withDecryption),
 	}
 
-	log.Printf("SSM GetParameter API を呼び出し中...")
+	slog.Info("SSM GetParameter API を呼び出し中")
 	result, err := ssmClient.GetParameter(input)
 	if err != nil {
 		return "", fmt.Errorf("SSM パラメータ %s の取得に失敗しました: %w", parameterName, err)
 	}
 
-	log.Printf("SSM パラメータの取得に成功: %s", parameterName)
+	slog.Info("SSM パラメータの取得に成功", "parameterName", parameterName)
 	return *result.Parameter.Value, nil
 }
 
 // HandleRequest は Lambdaハンドラの実際のロジックを含みます。
-// 依存オブジェクト (httpClient, nrApp) を引数として受け取るように変更しました。
-func HandleRequest(ctx context.Context, httpClient *http.Client, nrApp NewRelicApp) (string, error) {
-	log.Println("Lambda関数を開始します...")
+// 依存オブジェクト (httpClient, nrApp, getSSMParameter) を引数として受け取るように変更しました。
+func HandleRequest(ctx context.Context, httpClient *http.Client, nrApp NewRelicApp, getParam getSSMParameterFunc) (string, error) {
+	slog.Info("Lambda関数を開始します")
 
 	// --- NewRelicの初期化は main関数で実行済み ---
-	log.Println("NewRelicへの接続を待機中...")
+	slog.Info("NewRelicへの接続を待機中")
 	if err := nrApp.WaitForConnection(5 * time.Second); err != nil {
-		log.Printf("NewRelicへの接続に失敗しました: %v", err)
+		slog.Warn("NewRelicへの接続に失敗しました", "error", err)
 		// 接続失敗は致命的ではない場合もあるので、ここではログに留める
 	}
-	log.Println("NewRelicへの接続が完了しました。")
+	slog.Info("NewRelicへの接続が完了しました")
 
 	// アプリケーションが終了する前にデータを送信するのを待つ
 	defer nrApp.Shutdown(10 * time.Second)
@@ -97,7 +105,7 @@ func HandleRequest(ctx context.Context, httpClient *http.Client, nrApp NewRelicA
 	if tokenParam == "" {
 		return "", fmt.Errorf("環境変数 SWITCHBOT_TOKEN_PARAMETER が設定されていません")
 	}
-	token, err := getSSMParameter(tokenParam, true)
+	token, err := getParam(tokenParam, true)
 	if err != nil {
 		return "", fmt.Errorf("SwitchBot Tokenの取得に失敗しました: %w", err)
 	}
@@ -106,7 +114,7 @@ func HandleRequest(ctx context.Context, httpClient *http.Client, nrApp NewRelicA
 		return "", fmt.Errorf("環境変数 SWITCHBOT_DEVICE_ID が設定されていません")
 	}
 
-	log.Println("SwitchBot APIを呼び出します...")
+	slog.Info("SwitchBot APIを呼び出します", "deviceID", deviceID)
 	url := fmt.Sprintf("https://api.switch-bot.com/v1.1/devices/%s/status", deviceID)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -122,7 +130,7 @@ func HandleRequest(ctx context.Context, httpClient *http.Client, nrApp NewRelicA
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			log.Printf("resp.Body.Close() error: %v", err)
+			slog.Error("resp.Body.Close() error", "error", err)
 		}
 	}()
 
@@ -131,7 +139,7 @@ func HandleRequest(ctx context.Context, httpClient *http.Client, nrApp NewRelicA
 		return "", fmt.Errorf("レスポンスボディの読み込みに失敗しました: %w", err)
 	}
 
-	log.Printf("SwitchBot APIからのレスポンス: %s\n", string(body))
+	slog.Info("SwitchBot APIからのレスポンス", "response", string(body))
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("APIからエラーが返されました: %s", string(body))
@@ -142,7 +150,11 @@ func HandleRequest(ctx context.Context, httpClient *http.Client, nrApp NewRelicA
 		return "", fmt.Errorf("JSONのパースに失敗しました: %w", err)
 	}
 
-	log.Printf("パースされたデータ: %+v\n", switchBotResponse.Body)
+	slog.Info("パースされたデータ",
+		"deviceId", switchBotResponse.Body.DeviceID,
+		"temperature", switchBotResponse.Body.Temperature,
+		"humidity", switchBotResponse.Body.Humidity,
+		"battery", switchBotResponse.Body.Battery)
 
 	// --- NewRelicへのデータ送信 ---
 	eventData := map[string]interface{}{
@@ -151,10 +163,14 @@ func HandleRequest(ctx context.Context, httpClient *http.Client, nrApp NewRelicA
 		"humidity":    switchBotResponse.Body.Humidity,
 		"battery":     switchBotResponse.Body.Battery,
 	}
-	log.Printf("NewRelicに送信するデータ: %+v\n", eventData)
+	slog.Info("NewRelicに送信するデータ",
+		"deviceId", eventData["deviceId"],
+		"temperature", eventData["temperature"],
+		"humidity", eventData["humidity"],
+		"battery", eventData["battery"])
 	nrApp.RecordCustomEvent("SwitchBotSensor", eventData)
 
-	log.Println("NewRelicへのデータ送信を要求しました。")
+	slog.Info("NewRelicへのデータ送信を要求しました")
 
 	return "処理が正常に完了しました。", nil
 }
@@ -167,11 +183,13 @@ func main() {
 	// NewRelic License KeyをSSM Parameter Storeから取得
 	licenseKeyParam := os.Getenv("NEW_RELIC_LICENSE_KEY_PARAMETER")
 	if licenseKeyParam == "" {
-		log.Fatal("環境変数 NEW_RELIC_LICENSE_KEY_PARAMETER が設定されていません。")
+		slog.Error("環境変数 NEW_RELIC_LICENSE_KEY_PARAMETER が設定されていません")
+		os.Exit(1)
 	}
 	licenseKey, err := getSSMParameter(licenseKeyParam, true)
 	if err != nil {
-		log.Fatalf("NewRelic License Keyの取得に失敗しました: %v", err)
+		slog.Error("NewRelic License Keyの取得に失敗しました", "error", err)
+		os.Exit(1)
 	}
 
 	app, err := newrelic.NewApplication(
@@ -180,11 +198,12 @@ func main() {
 		newrelic.ConfigDistributedTracerEnabled(true),
 	)
 	if err != nil {
-		log.Fatalf("NewRelicアプリケーションの作成に失敗しました: %v", err)
+		slog.Error("NewRelicアプリケーションの作成に失敗しました", "error", err)
+		os.Exit(1)
 	}
 
 	// Lambdaハンドラを起動
 	lambda.Start(func(ctx context.Context) (string, error) {
-		return HandleRequest(ctx, &http.Client{}, app)
+		return HandleRequest(ctx, &http.Client{}, app, getSSMParameter)
 	})
 }

@@ -36,8 +36,8 @@ cleanup-test-env: ## Cleanup test SSM parameters
 	./scripts/cleanup-test-ssm.sh
 
 # コード品質
-fmt: ## Format Go code
-	go fmt ./...
+fmt: ## Format Go code with goimports
+	goimports -w .
 
 lint: ## Run golangci-lint
 	golangci-lint run
