@@ -22,14 +22,14 @@ type SwitchBotResponse struct {
 	StatusCode int    `json:"statusCode"`
 	Message    string `json:"message"`
 	Body       struct {
-		DeviceID           string  `json:"deviceId"`
-		DeviceType         string  `json:"deviceType"`		
-		HubDeviceID        string  `json:"hubDeviceId"`
-		Humidity           int     `json:"humidity"`
-		Temperature        float64 `json:"temperature"`
-		Version            string  `json:"version"`
-		Battery            int     `json:"battery"`
-		TemperatureScale   string  `json:"temperatureScale"`
+		DeviceID         string  `json:"deviceId"`
+		DeviceType       string  `json:"deviceType"`
+		HubDeviceID      string  `json:"hubDeviceId"`
+		Humidity         int     `json:"humidity"`
+		Temperature      float64 `json:"temperature"`
+		Version          string  `json:"version"`
+		Battery          int     `json:"battery"`
+		TemperatureScale string  `json:"temperatureScale"`
 	} `json:"body"`
 }
 
@@ -44,13 +44,13 @@ type NewRelicApp interface {
 // getSSMParameter は SSM Parameter Store からセキュアパラメータを取得します
 func getSSMParameter(parameterName string, withDecryption bool) (string, error) {
 	log.Printf("SSM パラメータを取得中: %s (withDecryption: %v)", parameterName, withDecryption)
-	
+
 	region := os.Getenv("AWS_REGION")
 	if region == "" {
 		region = "ap-northeast-1" // デフォルトリージョン
 	}
 	log.Printf("使用するリージョン: %s", region)
-	
+
 	sess, err := session.NewSession(&aws.Config{
 		Region: aws.String(region),
 	})
@@ -59,7 +59,7 @@ func getSSMParameter(parameterName string, withDecryption bool) (string, error) 
 	}
 
 	ssmClient := ssm.New(sess)
-	
+
 	input := &ssm.GetParameterInput{
 		Name:           aws.String(parameterName),
 		WithDecryption: aws.Bool(withDecryption),
@@ -120,7 +120,11 @@ func HandleRequest(ctx context.Context, httpClient *http.Client, nrApp NewRelicA
 	if err != nil {
 		return "", fmt.Errorf("APIリクエストに失敗しました: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("resp.Body.Close() error: %v", err)
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -159,7 +163,7 @@ func HandleRequest(ctx context.Context, httpClient *http.Client, nrApp NewRelicA
 func main() {
 	// New Relicアプリケーションの初期化
 	appName := os.Getenv("NEW_RELIC_APP_NAME")
-	
+
 	// NewRelic License KeyをSSM Parameter Storeから取得
 	licenseKeyParam := os.Getenv("NEW_RELIC_LICENSE_KEY_PARAMETER")
 	if licenseKeyParam == "" {

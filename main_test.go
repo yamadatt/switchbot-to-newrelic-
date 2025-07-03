@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"testing"
@@ -59,7 +60,7 @@ func (m *MockNewRelicApp) WaitForConnection(timeout time.Duration) error {
 // setupTestEnv はテスト用の環境変数を設定し、クリーンアップ関数を返します
 func setupTestEnv(t *testing.T, envVars map[string]string) func() {
 	t.Helper()
-	
+
 	// 既存の環境変数を保存
 	originalEnvs := make(map[string]string)
 	for key := range envVars {
@@ -67,23 +68,31 @@ func setupTestEnv(t *testing.T, envVars map[string]string) func() {
 			originalEnvs[key] = val
 		}
 	}
-	
+
 	// テスト用環境変数を設定
 	for key, value := range envVars {
 		if value == "" {
-			os.Unsetenv(key)
+			if err := os.Unsetenv(key); err != nil {
+				t.Fatalf("os.Unsetenv failed: %v", err)
+			}
 		} else {
-			os.Setenv(key, value)
+			if err := os.Setenv(key, value); err != nil {
+				t.Fatalf("os.Setenv failed: %v", err)
+			}
 		}
 	}
-	
+
 	// クリーンアップ関数を返す
 	return func() {
 		for key := range envVars {
 			if originalVal, exists := originalEnvs[key]; exists {
-				os.Setenv(key, originalVal)
+				if err := os.Setenv(key, originalVal); err != nil {
+					t.Fatalf("os.Setenv failed: %v", err)
+				}
 			} else {
-				os.Unsetenv(key)
+				if err := os.Unsetenv(key); err != nil {
+					t.Fatalf("os.Unsetenv failed: %v", err)
+				}
 			}
 		}
 	}
@@ -105,9 +114,7 @@ func MockSSMGetParameter(parameterName string, withDecryption bool) (string, err
 // HandleRequestWithMockSSM はSSMをモック化したバージョンのHandleRequest
 func HandleRequestWithMockSSM(ctx context.Context, httpClient *http.Client, nrApp NewRelicApp, ssmGetParam func(string, bool) (string, error)) (string, error) {
 	// NewRelicの接続待機
-	if err := nrApp.WaitForConnection(5 * time.Second); err != nil {
-		// 接続失敗は致命的ではない
-	}
+	_ = nrApp.WaitForConnection(5 * time.Second)
 	defer nrApp.Shutdown(10 * time.Second)
 
 	// SwitchBot TokenをSSM Parameter Storeから取得（モック版）
@@ -139,7 +146,11 @@ func HandleRequestWithMockSSM(ctx context.Context, httpClient *http.Client, nrAp
 	if err != nil {
 		return "", errors.New("APIリクエストに失敗しました: " + err.Error())
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("resp.Body.Close() error: %v", err)
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -170,17 +181,17 @@ func HandleRequestWithMockSSM(ctx context.Context, httpClient *http.Client, nrAp
 func TestHandleRequest(t *testing.T) {
 	// テストケースの定義
 	tests := []struct {
-		name                      string
-		envVars                   map[string]string
-		httpResponse              *http.Response
-		httpError                 error
-		waitForConnectionError    error
-		expectedError             string
-		expectEventCount          int
-		expectEventType           string
-		expectEventData           map[string]interface{}
-		expectShutdownCalled      bool
-		expectWaitForConnCalled   bool
+		name                    string
+		envVars                 map[string]string
+		httpResponse            *http.Response
+		httpError               error
+		waitForConnectionError  error
+		expectedError           string
+		expectEventCount        int
+		expectEventType         string
+		expectEventData         map[string]interface{}
+		expectShutdownCalled    bool
+		expectWaitForConnCalled bool
 	}{
 		{
 			name: "Success",
@@ -379,14 +390,14 @@ func TestSwitchBotResponse(t *testing.T) {
 				StatusCode: 100,
 				Message:    "success",
 				Body: struct {
-					DeviceID           string  `json:"deviceId"`
-					DeviceType         string  `json:"deviceType"`
-					HubDeviceID        string  `json:"hubDeviceId"`
-					Humidity           int     `json:"humidity"`
-					Temperature        float64 `json:"temperature"`
-					Version            string  `json:"version"`
-					Battery            int     `json:"battery"`
-					TemperatureScale   string  `json:"temperatureScale"`
+					DeviceID         string  `json:"deviceId"`
+					DeviceType       string  `json:"deviceType"`
+					HubDeviceID      string  `json:"hubDeviceId"`
+					Humidity         int     `json:"humidity"`
+					Temperature      float64 `json:"temperature"`
+					Version          string  `json:"version"`
+					Battery          int     `json:"battery"`
+					TemperatureScale string  `json:"temperatureScale"`
 				}{
 					DeviceID:         "test-device",
 					DeviceType:       "Meter",

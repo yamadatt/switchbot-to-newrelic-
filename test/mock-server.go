@@ -13,14 +13,14 @@ type MockSwitchBotResponse struct {
 	StatusCode int    `json:"statusCode"`
 	Message    string `json:"message"`
 	Body       struct {
-		DeviceID           string  `json:"deviceId"`
-		DeviceType         string  `json:"deviceType"`
-		HubDeviceID        string  `json:"hubDeviceId"`
-		Humidity           int     `json:"humidity"`
-		Temperature        float64 `json:"temperature"`
-		Version            string  `json:"version"`
-		Battery            int     `json:"battery"`
-		TemperatureScale   string  `json:"temperatureScale"`
+		DeviceID         string  `json:"deviceId"`
+		DeviceType       string  `json:"deviceType"`
+		HubDeviceID      string  `json:"hubDeviceId"`
+		Humidity         int     `json:"humidity"`
+		Temperature      float64 `json:"temperature"`
+		Version          string  `json:"version"`
+		Battery          int     `json:"battery"`
+		TemperatureScale string  `json:"temperatureScale"`
 	} `json:"body"`
 }
 
@@ -82,7 +82,9 @@ func main() {
 		response.Body.TemperatureScale = "c"
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			log.Printf("Encode error: %v", err)
+		}
 		log.Printf("Sent response: %+v", response)
 	})
 
@@ -94,18 +96,24 @@ func main() {
 		// リクエストボディをログ出力
 		if r.Body != nil {
 			body := make([]byte, r.ContentLength)
-			r.Body.Read(body)
+			if _, err := r.Body.Read(body); err != nil {
+				log.Printf("Body read error: %v", err)
+			}
 			log.Printf("Request body: %s", string(body))
 		}
 
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"success": true}`))
+		if _, err := w.Write([]byte(`{"success": true}`)); err != nil {
+			log.Printf("Write error: %v", err)
+		}
 	})
 
 	// ヘルスチェック用エンドポイント
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		if _, err := w.Write([]byte("OK")); err != nil {
+			log.Printf("Write error: %v", err)
+		}
 	})
 
 	log.Printf("Mock server starting on port %s", port)
