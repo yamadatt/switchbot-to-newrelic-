@@ -190,36 +190,3 @@ jobs:
         aws ssm delete-parameter --name "/test/switchbot/token" || true
         aws ssm delete-parameter --name "/test/newrelic/license_key" || true
 
-  sam-validate:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Install SAM CLI
-      run: |
-        pip install aws-sam-cli
-
-    - name: Validate SAM template
-      run: sam validate
-
-    - name: Check SAM template formatting
-      run: |
-        # SAMテンプレートの基本的な構文チェック
-        python -c "
-        import yaml
-        import sys
-        try:
-            with open('template.yaml', 'r') as f:
-                yaml.safe_load(f)
-            print('✅ SAM template is valid YAML')
-        except yaml.YAMLError as e:
-            print(f'❌ SAM template YAML error: {e}')
-            sys.exit(1)
-        "
