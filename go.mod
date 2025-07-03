@@ -1,6 +1,6 @@
 module switchbot-to-newrelic
 
-go 1.24.2
+go 1.22.12
 
 require (
 	github.com/aws/aws-lambda-go v1.49.0
