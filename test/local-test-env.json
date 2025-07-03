@@ -1,0 +1,10 @@
+{
+  "SwitchBotToNewRelicFunction": {
+    "SWITCHBOT_TOKEN_PARAMETER": "/test/switchbot/token",
+    "NEW_RELIC_LICENSE_KEY_PARAMETER": "/test/newrelic/license_key",
+    "SWITCHBOT_DEVICE_ID": "test-device-123",
+    "NEW_RELIC_APP_NAME": "switchbot-to-newrelic-test",
+    "NEW_RELIC_ACCOUNT_ID": "1234567890",
+    "AWS_REGION": "ap-northeast-1"
+  }
+}

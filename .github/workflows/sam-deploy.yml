@@ -1,0 +1,124 @@
+name: SAM Deploy
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'main.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'template.yaml'
+      - 'Dockerfile'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+
+env:
+  AWS_REGION: ap-northeast-1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install SAM CLI
+      run: |
+        pip install aws-sam-cli
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Set deployment parameters
+      run: |
+        ENV="${{ github.event.inputs.environment || 'staging' }}"
+        echo "STACK_NAME=switchbot-to-newrelic-${ENV}" >> $GITHUB_ENV
+        echo "DEPLOYMENT_ENV=${ENV}" >> $GITHUB_ENV
+
+    - name: Run tests before deployment
+      run: |
+        go test -v ./...
+
+    - name: Build SAM application
+      run: sam build
+
+    - name: Deploy to AWS
+      run: |
+        sam deploy \
+          --stack-name ${{ env.STACK_NAME }} \
+          --s3-bucket ${{ secrets.SAM_DEPLOYMENT_BUCKET }} \
+          --s3-prefix ${{ env.DEPLOYMENT_ENV }} \
+          --region ${{ env.AWS_REGION }} \
+          --capabilities CAPABILITY_IAM \
+          --no-confirm-changeset \
+          --no-fail-on-empty-changeset \
+          --parameter-overrides \
+            SwitchBotTokenParameterName="${{ secrets.SWITCHBOT_TOKEN_PARAMETER_NAME }}" \
+            SwitchBotDeviceIdParameterName="${{ secrets.SWITCHBOT_DEVICE_ID_PARAMETER_NAME }}" \
+            NewRelicAppNameParameterName="${{ secrets.NEW_RELIC_APP_NAME_PARAMETER_NAME }}" \
+            NewRelicLicenseKeyParameterName="${{ secrets.NEW_RELIC_LICENSE_KEY_PARAMETER_NAME }}" \
+            NewRelicAccountIdParameterName="${{ secrets.NEW_RELIC_ACCOUNT_ID_PARAMETER_NAME }}"
+
+    - name: Get deployment outputs
+      run: |
+        aws cloudformation describe-stacks \
+          --stack-name ${{ env.STACK_NAME }} \
+          --region ${{ env.AWS_REGION }} \
+          --query 'Stacks[0].Outputs' \
+          --output table
+
+    - name: Test deployed function
+      run: |
+        # デプロイされた関数をテスト実行
+        FUNCTION_NAME=$(aws cloudformation describe-stacks \
+          --stack-name ${{ env.STACK_NAME }} \
+          --region ${{ env.AWS_REGION }} \
+          --query 'Stacks[0].Outputs[?OutputKey==`SwitchBotToNewRelicFunction`].OutputValue' \
+          --output text)
+        
+        if [ ! -z "$FUNCTION_NAME" ]; then
+          echo "Testing deployed function: $FUNCTION_NAME"
+          aws lambda invoke \
+            --function-name $FUNCTION_NAME \
+            --region ${{ env.AWS_REGION }} \
+            --payload '{}' \
+            response.json
+          
+          echo "Function response:"
+          cat response.json
+        else
+          echo "Function name not found in stack outputs"
+        fi
+
+    - name: Notify deployment status
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Deployment to ${{ env.DEPLOYMENT_ENV }} succeeded"
+        else
+          echo "❌ Deployment to ${{ env.DEPLOYMENT_ENV }} failed"
+        fi

@@ -1,0 +1,147 @@
+name: SAM PR Check
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'main.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'template.yaml'
+      - 'Dockerfile'
+
+env:
+  AWS_REGION: ap-northeast-1
+
+jobs:
+  sam-diff:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install SAM CLI
+      run: |
+        pip install aws-sam-cli
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Build current SAM application
+      run: sam build
+
+    - name: Generate CloudFormation template
+      run: |
+        sam package \
+          --s3-bucket ${{ secrets.SAM_DEPLOYMENT_BUCKET }} \
+          --s3-prefix pr-check \
+          --output-template-file packaged-template.yaml
+
+    - name: Checkout main branch
+      run: |
+        git checkout main
+        git checkout ${{ github.head_ref }} -- .github/
+
+    - name: Build main branch SAM application
+      run: |
+        sam build --build-dir .aws-sam-main
+
+    - name: Generate main branch CloudFormation template
+      run: |
+        sam package \
+          --build-dir .aws-sam-main \
+          --s3-bucket ${{ secrets.SAM_DEPLOYMENT_BUCKET }} \
+          --s3-prefix pr-check-main \
+          --output-template-file packaged-template-main.yaml
+
+    - name: Compare templates
+      run: |
+        echo "## SAM Template Changes" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if diff -u packaged-template-main.yaml packaged-template.yaml > template-diff.txt; then
+          echo "✅ No changes detected in CloudFormation template" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "📝 Changes detected in CloudFormation template:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```diff' >> $GITHUB_STEP_SUMMARY
+          head -50 template-diff.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          
+          if [ $(wc -l < template-diff.txt) -gt 50 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "... (diff truncated, showing first 50 lines)" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
+
+    - name: Validate template changes
+      run: |
+        # 重要な変更をチェック
+        if grep -q "DeletionPolicy\|UpdateReplacePolicy" template-diff.txt; then
+          echo "⚠️ **Warning**: Detected changes to DeletionPolicy or UpdateReplacePolicy" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if grep -q "Type.*AWS::Lambda::Function" template-diff.txt; then
+          echo "🔄 **Info**: Lambda function configuration changes detected" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if grep -q "Type.*AWS::IAM" template-diff.txt; then
+          echo "🔐 **Info**: IAM policy changes detected" >> $GITHUB_STEP_SUMMARY
+        fi
+
+  sam-security-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install tools
+      run: |
+        pip install aws-sam-cli cfn-lint
+        npm install -g @aws-cdk/cfn-guard
+
+    - name: Validate SAM template
+      run: sam validate
+
+    - name: Lint CloudFormation template
+      run: |
+        sam build
+        cfn-lint .aws-sam/build/template.yaml
+
+    - name: Security scan with cfn-guard
+      run: |
+        # 基本的なセキュリティルールをチェック
+        cat > security-rules.guard << 'EOF'
+        # Lambda関数のタイムアウトチェック
+        AWS::Lambda::Function {
+          Properties.Timeout <= 300
+        }
+        
+        # IAMロールの権限チェック
+        AWS::IAM::Role {
+          Properties.AssumeRolePolicyDocument.Statement[*].Effect == "Allow"
+          Properties.AssumeRolePolicyDocument.Statement[*].Principal.Service == "lambda.amazonaws.com"
+        }
+        EOF
+        
+        cfn-guard validate \
+          --data .aws-sam/build/template.yaml \
+          --rules security-rules.guard || echo "Security check completed with warnings"

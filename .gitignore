@@ -11,6 +11,10 @@ handler
 # SAM/CloudFormation build artifacts
 .aws-sam/
 
+# Environment variables file
+# This file may contain sensitive information
+.env
+
 # SAM configuration file
 # This file may contain sensitive information or environment-specific details.
 samconfig.toml
@@ -26,3 +30,12 @@ samconfig.toml
 
 # Log files
 *.log
+
+# Test artifacts
+test/mock-server
+test/integration-test-env.json
+coverage.out
+coverage.html
+
+# Temporary test files
+tmp_rovodev_*

@@ -1,0 +1,16 @@
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /app
+COPY mock-server.go .
+RUN go mod init mock-server && \
+    go build -o mock-server mock-server.go
+
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates curl
+WORKDIR /root/
+
+COPY --from=builder /app/mock-server .
+
+EXPOSE 8080
+
+CMD ["./mock-server"]

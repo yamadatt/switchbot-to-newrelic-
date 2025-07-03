@@ -1,0 +1,244 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Verify dependencies
+      run: go mod verify
+
+    - name: Run go vet
+      run: go vet ./...
+
+    - name: Run go fmt check
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "The following files are not formatted:"
+          gofmt -s -l .
+          exit 1
+        fi
+
+    - name: Run tests
+      run: go test -v -race -coverprofile=coverage.out ./...
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.out
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  security:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Run Gosec Security Scanner
+      uses: securecodewarrior/github-action-gosec@master
+      with:
+        args: './...'
+
+    - name: Run govulncheck
+      run: |
+        go install golang.org/x/vuln/cmd/govulncheck@latest
+        govulncheck ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Run golangci-lint
+      uses: golangci/golangci-lint-action@v4
+      with:
+        version: latest
+        args: --timeout=5m
+
+  sam-test:
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install SAM CLI
+      run: |
+        pip install aws-sam-cli
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ap-northeast-1
+
+    - name: Setup test SSM parameters
+      run: |
+        # テスト用のSSMパラメータを作成
+        aws ssm put-parameter \
+          --name "/test/switchbot/token" \
+          --value "test-switchbot-token-github-actions" \
+          --type "SecureString" \
+          --overwrite || true
+        
+        aws ssm put-parameter \
+          --name "/test/newrelic/license_key" \
+          --value "test-newrelic-license-key-github-actions" \
+          --type "SecureString" \
+          --overwrite || true
+
+    - name: Build mock server
+      run: |
+        cd test
+        go build -o mock-server mock-server.go
+
+    - name: Start mock server
+      run: |
+        cd test
+        MOCK_PORT=8080 \
+        MOCK_TEMPERATURE=22.5 \
+        MOCK_HUMIDITY=55 \
+        MOCK_BATTERY=90 \
+        ./mock-server &
+        echo $! > mock-server.pid
+        
+        # モックサーバーの起動を待機
+        for i in {1..30}; do
+          if curl -s http://localhost:8080/health > /dev/null 2>&1; then
+            echo "Mock server is running"
+            break
+          fi
+          if [ $i -eq 30 ]; then
+            echo "Mock server failed to start"
+            exit 1
+          fi
+          sleep 1
+        done
+
+    - name: Build SAM application
+      run: sam build
+
+    - name: Create integration test environment
+      run: |
+        cat > test/ci-test-env.json << EOF
+        {
+          "SwitchBotToNewRelicFunction": {
+            "SWITCHBOT_TOKEN_PARAMETER": "/test/switchbot/token",
+            "NEW_RELIC_LICENSE_KEY_PARAMETER": "/test/newrelic/license_key",
+            "SWITCHBOT_DEVICE_ID": "test-device-ci",
+            "NEW_RELIC_APP_NAME": "switchbot-to-newrelic-ci-test",
+            "NEW_RELIC_ACCOUNT_ID": "1234567890",
+            "AWS_REGION": "ap-northeast-1"
+          }
+        }
+        EOF
+
+    - name: Run SAM local invoke test
+      run: |
+        # Docker networkを使用してSAM local invokeを実行
+        sam local invoke SwitchBotToNewRelicFunction \
+          --event events/test-event.json \
+          --env-vars test/ci-test-env.json \
+          --docker-network host
+
+    - name: Stop mock server
+      if: always()
+      run: |
+        if [ -f test/mock-server.pid ]; then
+          kill $(cat test/mock-server.pid) || true
+          rm test/mock-server.pid
+        fi
+
+    - name: Cleanup test SSM parameters
+      if: always()
+      run: |
+        aws ssm delete-parameter --name "/test/switchbot/token" || true
+        aws ssm delete-parameter --name "/test/newrelic/license_key" || true
+
+  sam-validate:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install SAM CLI
+      run: |
+        pip install aws-sam-cli
+
+    - name: Validate SAM template
+      run: sam validate
+
+    - name: Check SAM template formatting
+      run: |
+        # SAMテンプレートの基本的な構文チェック
+        python -c "
+        import yaml
+        import sys
+        try:
+            with open('template.yaml', 'r') as f:
+                yaml.safe_load(f)
+            print('✅ SAM template is valid YAML')
+        except yaml.YAMLError as e:
+            print(f'❌ SAM template YAML error: {e}')
+            sys.exit(1)
+        "
